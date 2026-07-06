@@ -1,8 +1,18 @@
 import hashlib
+import html
 import logging
 import pandas as pd
 from datasets import load_dataset
 from src.ingestion.jobs import job_start, job_finish, job_fail
+import re
+TAG_RE = re.compile(r"<[^>]+>")
+BRACKET_TAG_RE = re.compile(r"\[\[[^\]]*\]\]")  # e.g. [[VIDEOID:...]], [[ASIN:...]]
+
+def clean_text(text: str) -> str:
+    text = html.unescape(text)
+    text = BRACKET_TAG_RE.sub(" ", text)
+    text = TAG_RE.sub(" ", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,7 +43,7 @@ def ingest(category: str = "raw_review_Electronics", limit: int = 50_000,
             if raw_seen > limit:
                 break
 
-            text = (rec.get("text") or "").strip()
+            text = clean_text((rec.get("text") or "").strip())
             rating = rec.get("rating")
             if len(text) < MIN_TEXT_LEN or rating is None:
                 continue

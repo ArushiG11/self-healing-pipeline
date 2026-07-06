@@ -8,11 +8,11 @@ logging.basicConfig(level=logging.INFO,
     format="%(asctime)s | %(name)s | %(levelname)s | %(message)s")
 log = logging.getLogger("vecload")
 
-def run(in_path: str = "data/chunks_sentence.parquet", batch: int = 500):
-    job_id = job_start("vecload:pg")
+def run(in_path: str = "data/chunks_sentence.parquet", table: str = "chunks", batch: int = 500):
+    job_id = job_start(f"vecload:{table}")
     try:
         df = pd.read_parquet(in_path)
-        store = PgVectorStore()
+        store = PgVectorStore(table=table)
         for i in tqdm(range(0, len(df), batch), desc="loading"):
             b = df.iloc[i:i + batch]
             store.upsert(

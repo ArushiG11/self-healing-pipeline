@@ -7,7 +7,7 @@ from src.vectorstore.base import VectorStore, Hit
 load_dotenv()
 
 class PgVectorStore(VectorStore):
-    def __init__(self, table: str = "chunks", dim: int = 384):
+    def __init__(self, table: str = "chunks_sentence", dim: int = 384):
         self.table = table
         self.dim = dim
         self.conn = psycopg2.connect(os.environ["PG_CONN"])
