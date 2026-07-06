@@ -1,0 +1,3 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/vector-embedding-platform/.venv/bin/python"
+}
