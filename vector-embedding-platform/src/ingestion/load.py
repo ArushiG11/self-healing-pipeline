@@ -1,8 +1,10 @@
 import hashlib
 import html
+import json
 import logging
 import pandas as pd
 from datasets import load_dataset
+from huggingface_hub import HfFileSystem
 from src.ingestion.jobs import job_start, job_finish, job_fail
 import re
 TAG_RE = re.compile(r"<[^>]+>")
@@ -24,6 +26,32 @@ MIN_TEXT_LEN = 20
 
 def text_hash(text: str) -> str:
     return hashlib.sha256(text.strip().lower().encode()).hexdigest()
+
+def load_product_meta(review_category: str, parent_asins: set[str]) -> dict[str, dict]:
+    """title/main_category by parent_asin, restricted to the asins we actually kept.
+
+    Reads the raw jsonl line-by-line via HfFileSystem instead of the `datasets`
+    JSON loader: the metadata file has inconsistent per-record schemas (e.g. an
+    `author` field that's sometimes a struct, sometimes null) that break the
+    latter's Arrow-based schema casting.
+    """
+    fs = HfFileSystem()
+    path = (
+        "datasets/McAuley-Lab/Amazon-Reviews-2023/"
+        f"raw/meta_categories/meta_{review_category}.jsonl"
+    )
+    meta = {}
+    remaining = set(parent_asins)
+    with fs.open(path, "r") as f:
+        for line in f:
+            rec = json.loads(line)
+            pa = rec.get("parent_asin")
+            if pa in remaining:
+                meta[pa] = {"title": rec.get("title"), "category": rec.get("main_category")}
+                remaining.discard(pa)
+                if not remaining:
+                    break
+    return meta
 
 def ingest(category: str = "raw_review_Electronics", limit: int = 50_000,
            out_path: str = "data/reviews_clean.parquet") -> str:
@@ -68,10 +96,18 @@ def ingest(category: str = "raw_review_Electronics", limit: int = 50_000,
                 log.info("progress | raw_seen=%d kept=%d", raw_seen, len(rows))
 
         df = pd.DataFrame(rows)
+
+        parent_asins = set(df["parent_asin"].dropna())
+        meta = load_product_meta(review_category, parent_asins)
+        df["product_title"] = df["parent_asin"].map(lambda pa: meta.get(pa, {}).get("title"))
+        df["category"] = df["parent_asin"].map(
+            lambda pa: meta.get(pa, {}).get("category") or review_category
+        )
+
         df.to_parquet(out_path, index=False)
 
-        log.info("done | raw_seen=%d after_filter=%d kept=%d -> %s",
-                 raw_seen, after_filter, len(df), out_path)
+        log.info("done | raw_seen=%d after_filter=%d kept=%d matched_meta=%d -> %s",
+                 raw_seen, after_filter, len(df), len(meta), out_path)
         job_finish(job_id, records_in=raw_seen, records_out=len(df))
         return out_path
 

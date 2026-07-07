@@ -1,9 +1,10 @@
 import json
 import logging
-import numpy as np
 import pandas as pd
 from src.embedding.bge import BgeEmbeddingClient
 from src.vectorstore.pg import PgVectorStore
+from src.retrieval.reranker import CrossEncoderReranker
+from src.retrieval.retriever import Retriever
 from src.ingestion.jobs import job_start, job_finish, job_fail
 
 logging.basicConfig(level=logging.INFO,
@@ -11,15 +12,16 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger("eval")
 
 def evaluate(table: str, gold_path: str = "data/goldset.jsonl",
-             k: int = 5) -> dict:
+             k: int = 5, rerank: bool = True) -> dict:
     gold = [json.loads(l) for l in open(gold_path)]
     client = BgeEmbeddingClient()
     store = PgVectorStore(table=table)
+    reranker = CrossEncoderReranker() if rerank else None
+    retriever = Retriever(client, store, reranker=reranker, k=k)
 
     hits, rr_sum = 0, 0.0
     for g in gold:
-        vec = np.array(client.embed([g["question"]])[0])
-        results = store.query(vec, k=k)
+        results = retriever.retrieve(g["question"])
         rank = next(
             (i + 1 for i, h in enumerate(results)
              if h.metadata["parent_asin"] is not None

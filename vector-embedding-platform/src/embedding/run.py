@@ -24,11 +24,19 @@ def run(strategy: str = "sentence",
             chunks.extend(chunker(row.id, row.text))
         log.info("chunked | reviews=%d chunks=%d", len(df), len(chunks))
 
+        product_by_parent = df.set_index("id")[["product_title", "category"]].to_dict("index")
+
+        def enrich(c):
+            p = product_by_parent.get(c.parent_id, {})
+            label = p.get("product_title") or p.get("category")
+            return f"Product: {label} | Review: {c.text}"
+
         client = BgeEmbeddingClient()
-        texts = [c.text for c in chunks]
+        texts = [c.text for c in chunks]           # original, for storage/display
+        embed_texts = [enrich(c) for c in chunks]  # enriched, for embedding
         vectors = []
-        for i in tqdm(range(0, len(texts), batch_size), desc="embedding"):
-            vectors.extend(client.embed(texts[i:i + batch_size]))
+        for i in tqdm(range(0, len(embed_texts), batch_size), desc="embedding"):
+            vectors.extend(client.embed(embed_texts[i:i + batch_size]))
 
         meta = df.set_index("id")[["rating", "asin", "parent_asin", "helpful_vote"]]
         out = pd.DataFrame({
