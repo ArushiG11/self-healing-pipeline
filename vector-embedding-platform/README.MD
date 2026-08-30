@@ -1,112 +1,23 @@
 # Review-RAG: A Self-Healing RAG Data Platform
 
-A production-style Retrieval-Augmented Generation system over **45,000+ Amazon product reviews**, built with a vendor-agnostic architecture and a retrieval evaluation harness. Every pipeline stage is an observable, idempotent, restartable job — the substrate for an agentic self-healing layer (in progress).
+A production-style Retrieval-Augmented Generation system over **45,000+ Amazon product reviews**, built with a vendor-agnostic architecture, a retrieval evaluation harness, and an agentic self-healing layer that reads pipeline failures and retries or escalates them on its own.
 
-**Live demo:** _coming soon_ · **Stack:** Python · pgvector (Postgres) · sentence-transformers (bge-small) · Groq (Llama 3.1) · FastAPI
-
----
-
-## Why this project
-
-Most RAG demos show a happy path. This project treats RAG as what it actually is in production: **a data pipeline that fails in interesting ways and must be measured, not vibed.** Three design commitments follow from that:
-
-1. **Vendor-agnostic seams.** Embeddings, vector store, and LLM sit behind three small interfaces (`EmbeddingClient`, `VectorStore`, `LLMClient`). The current backends are open-stack (bge / pgvector / Groq); an Azure backend (Azure OpenAI / AI Search / Foundry agents) drops in as one file per seam plus a config flip.
-2. **Observability from day one.** Every pipeline stage writes to a `jobs` table (status, record counts, captured errors). The table's history includes real failures — a deprecated HF dataset loader, Groq 429 rate limits, a silent config-drift bug — each diagnosed and recovered.
-3. **Evaluation as an instrument.** Retrieval quality is measured (recall@k, MRR) against a synthetic gold set, and the eval harness itself went through a documented debugging cycle (see below) — which turned out to be the most instructive part of the build.
+**Stack:** Python · pgvector (Postgres) · sentence-transformers (bge-small + cross-encoder reranking) · Groq (Llama 3.1) · FastAPI · Streamlit
 
 ---
 
-## Architecture
+## Documentation
 
-```
-HuggingFace (streaming)
-      │
-      ▼
-┌─────────────┐   ┌──────────────┐   ┌───────────────┐   ┌──────────────┐
-│  Ingestion   │──▶│   Chunking   │──▶│   Embedding   │──▶│ Vector store │
-│ validate,    │   │ fixed-size / │   │ bge-small     │   │ pgvector +   │
-│ dedup, clean │   │ sentence     │   │ (local, 384d) │   │ HNSW index   │
-└─────────────┘   └──────────────┘   └───────────────┘   └──────┬───────┘
-      │                                                          │
-      │            every stage logs to the `jobs` table          │
-      ▼                                                          ▼
-┌─────────────┐                       ┌───────────────┐   ┌──────────────┐
-│ jobs table  │                       │  Generation    │◀──│  Retrieval   │
-│ (Postgres)  │                       │ grounded answer│   │ top-k + meta │
-│ status/errs │                       │ w/ citations   │   │ filtering    │
-└─────────────┘                       └───────┬───────┘   └──────────────┘
-                                              │
-                                              ▼
-                                     FastAPI  /ask  /health
-```
+All project documentation lives in [`docs/`](docs/):
 
-- **Ingestion** streams the [Amazon Reviews 2023](https://huggingface.co/datasets/McAuley-Lab/Amazon-Reviews-2023) Electronics category (no bulk download), validates, strips HTML/video markup, and dedups by content hash. 50,001 raw reviews → 45,293 kept (~9.4% junk/duplicates).
-- **Chunking** is a pluggable strategy (`fixed` | `sentence`), chosen so the two could be A/B compared. 45,293 reviews → 67,603 chunks (1.49 chunks/review).
-- **Embedding** runs `BAAI/bge-small-en-v1.5` locally, batched (67k chunks in ~32 min on a MacBook Air CPU), with the bge query-side instruction prefix applied to queries only.
-- **Vector store** is Postgres + pgvector with an HNSW index (inner-product ops over normalized vectors ≡ cosine). Metadata (rating, ASIN) lives beside the vectors, so semantic search composes with SQL filters (e.g. `min_rating=4`) in one query.
-- **Generation** builds a numbered context block from top-k chunks and prompts Llama 3.1 (Groq) at low temperature with strict grounding rules: cite excerpts by number, surface disagreement between reviews, and refuse when the context doesn't contain the answer.
-- **Idempotency everywhere:** chunk IDs are content-hash-derived (`parentid-seq`), and loads are `ON CONFLICT` upserts — every job is safely re-runnable, a prerequisite for automated retry/healing.
+| Doc | What's in it |
+|---|---|
+| [`docs/README.md`](docs/README.md) | Full project narrative: architecture, retrieval evaluation methodology, the debugging story behind the eval harness, observability, API reference, quickstart, roadmap |
+| [`docs/process.md`](docs/process.md) | **Process doc** — chronological build log: what was done, in what order, and why, phase by phase |
+| [`docs/solution-design.md`](docs/solution-design.md) | **Solution design doc** — the system by architectural layer: what technology is used at each stage, why it was chosen, and how it's implemented, plus a full tech stack reference |
+| [`docs/retrieval-quality-upgrades.md`](docs/retrieval-quality-upgrades.md) | Deep dive on the most recent phase: corpus cleaning, product-context embeddings, cross-encoder reranking — implementation detail and test results |
 
----
-
-## Retrieval evaluation
-
-### Method
-
-- **Synthetic gold set:** 150 (question, source-review) pairs generated by an LLM from known chunks — so the correct answer is known by construction.
-- **Metrics:** recall@k (did the source review appear in the top k?) and MRR (how high did it rank?).
-- **Cross-strategy fairness:** chunk boundaries differ between strategies, so hits are judged at the **parent-review level** via lineage IDs carried since ingestion.
-- **Controlled comparison:** identical gold set, embedding model, corpus, and k — only the chunking strategy varies.
-
-### Results
-
-| Store | recall@5 | recall@10 | MRR |
-|---|---|---|---|
-| **Sentence chunking** | **0.393** | **~0.45** | **0.311** |
-| Fixed-size chunking | 0.327 | — | 0.230 |
-
-**Sentence-aware chunking outperformed fixed-size by ~20% relative recall@5 and ~35% relative MRR.** The larger MRR gap suggests coherent sentence boundaries produce sharper vectors that not only get found more often but rank higher when found.
-
-### The part that actually mattered: debugging the eval itself
-
-The first measurement was **recall@5 = 0.373**, which looked like a retrieval problem. Failure inspection said otherwise, and the harness went through three documented iterations:
-
-1. **Generic questions.** Inspecting misses showed retrieval returning *topically correct* chunks — the gold questions ("Is this product functional?") were so generic that grading against one specific source review was meaningless. Fix: prompt the generator to include concrete identifying details.
-2. **Hallucinated specifics.** The "include concrete details" instruction backfired: for thin chunks, the LLM *invented* details (product names, timeframes, measurements) not present in the source — producing questions no retrieval system could match. A tidy lesson in LLMs satisfying the letter of an instruction against its intent. Fix: ground the prompt ("use ONLY details explicitly stated"), raise the source-chunk length floor, and strip HTML/markup pollution (`<br/>`, `[[VIDEOID:…]]`) discovered in the corpus along the way.
-3. **Rank-distribution analysis** on the final gold set: of 150 questions, 59 hit in the top 5, 29 were near-misses (ranks 6–50), and 62 ranked beyond 50. The near-miss band reflects a **corpus-redundancy ceiling**: many reviews validly answer each question, while single-source labels credit exactly one — making these figures a conservative lower bound on practical retrieval quality.
-
-**Known limitation / next rung:** single-source gold labels undercount valid retrievals. The production-grade fix is multi-label relevance (LLM-judged relevance over the retrieved top-k), which is the planned next iteration of the harness.
-
-Along the way the harness also caught a **silent config-drift failure**: after a corpus rebuild, an eval run pointed at a stale table scored recall@5 = 0.067 while every pipeline job reported success. The jobs table catches loud failures; implausible metric movement catches silent ones. The system now needs both signals — which is exactly what the agent layer will watch.
-
----
-
-## Observability: the jobs table
-
-Every stage runs the same bookend pattern — `job_start` → work → `job_finish` / `job_fail` (error captured, exception re-raised). A real excerpt of the table's history:
-
-| job | status | notes |
-|---|---|---|
-| `ingest:raw_review_Electronics` | failed | HF deprecated script-based dataset loaders — real environment drift, captured |
-| `ingest:raw_review_Electronics` | succeeded | 50,001 → 45,293 |
-| `embed:sentence` | succeeded | 67,603 chunks |
-| `goldset:generate` | succeeded | survived 5× Groq 429 rate limits via SDK-level backoff/retry |
-| `eval:retrieval` | failed | missing upstream artifact — error message captured |
-| `eval:retrieval` | succeeded | recovery on the record |
-
-Failed rows are deliberately kept: they are the medical chart the self-healing agent reads.
-
----
-
-## API
-
-```
-GET  /health          → {"status": "ok", "chunks": <count>}
-POST /ask             → grounded answer + ranked, cited sources
-      {"question": "...", "min_rating": 4.0}
-```
-
-FastAPI with Pydantic request/response contracts; interactive docs auto-generated at `/docs`.
+If you're new to this project, read `docs/solution-design.md` for *what exists and why*, and `docs/process.md` for *how it got built*.
 
 ---
 
@@ -136,25 +47,4 @@ python -c "from src.eval.retrieval_eval import run; run(tables=['chunks_sentence
 uvicorn src.api.main:app --reload   # then open http://localhost:8000/docs
 ```
 
----
-
-## Roadmap
-
-- [x] Observable ingestion → chunking → embedding → indexing pipeline
-- [x] Chunking-strategy A/B with controlled retrieval evaluation
-- [x] Grounded generation with citations, refusal handling, and metadata filtering
-- [x] FastAPI service
-- [ ] Streamlit demo UI + public deployment
-- [ ] **Self-healing agent:** reads the `jobs` table and health signals, diagnoses failures (rate limits, missing artifacts, config drift), retries with backoff, fails over between embedding backends, and validates recovery against retrieval metrics
-- [ ] Azure backend implementations (Azure OpenAI, AI Search, Foundry agents) behind the existing seams
-- [ ] Multi-label gold set (LLM-judged relevance) to lift the single-source labeling ceiling
-- [ ] Bulk-insert optimization (`execute_values`) and corpus versioning column
-
----
-
-## Lessons this project actually taught
-
-- A surprising eval number is the harness working, not failing — inspect misses before "fixing" retrieval.
-- LLM-generated gold sets inherit LLM failure modes; grounding constraints matter as much in eval tooling as in the product.
-- Content-addressed IDs give idempotency *within* a corpus version; a corpus change is a new version and stale stores must be retired loudly.
-- Loud failures and silent failures need different detectors. Job status catches the first; sanity-checked metrics catch the second.
+See [`docs/README.md`](docs/README.md) for the full architecture and API reference.
