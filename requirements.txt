@@ -1,0 +1,4 @@
+psycopg[binary]
+pytest
+huggingface_hub[hf_xet]
+fsspec

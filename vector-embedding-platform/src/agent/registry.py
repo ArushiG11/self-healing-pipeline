@@ -5,12 +5,16 @@ from src.vectorstore.load import run as vecload_run
 from src.eval.goldset import run as goldset_run
 
 def _embed_sentence(**kw): return embed_run(strategy="sentence", **kw)
+def _embed_fixed(**kw): return embed_run(strategy="fixed", **kw)
 def _vecload_sentence(**kw): return vecload_run("data/chunks_sentence.parquet", table="chunks_sentence", **kw)
+def _vecload_fixed(**kw): return vecload_run("data/chunks_fixed.parquet", table="chunks_fixed", **kw)
 
 JOB_REGISTRY = {
     "ingest": lambda: ingest(),
     "embed:sentence": _embed_sentence,
+    "embed:fixed": _embed_fixed,
     "vecload:pg:chunks_sentence": _vecload_sentence,
+    "vecload:pg:chunks_fixed": _vecload_fixed,
     "goldset:generate": lambda: goldset_run(),
 }
 

@@ -68,5 +68,5 @@ Same methodology as the main README: recall@k / MRR against an LLM-generated gol
 ## Known follow-ups
 
 - **Ablation** to separate enrichment's contribution from reranking's (e.g., rerank on/off with enrichment held fixed).
-- **Agent registry gap:** `src/agent/registry.py` only has runners for `ingest`, `embed:sentence`, `vecload:pg:chunks_sentence`, and `goldset:generate`. A failed `embed:fixed` or its vecload has no registered runner, so the self-healing agent will escalate rather than auto-retry it. Worth registering now that `chunks_fixed` is a real, evaluated table rather than a throwaway comparison arm.
+- ~~**Agent registry gap:**~~ Fixed — `src/agent/registry.py` now also registers `embed:fixed` and `vecload:pg:chunks_fixed`, so a failure in either is auto-retried like its `sentence` counterpart instead of always escalating.
 - **Metadata fill rate** is ~70%; the remaining 30% of chunks embed with only the category-level fallback (`"Electronics"`) rather than a real product title.

@@ -149,5 +149,5 @@ This round of docs — separating the chronological account (this file) from the
 
 ## Where things stand now
 
-- Live and current: cleaned corpus, both chunking strategies re-embedded with product-context enrichment, both Postgres tables (`chunks_sentence`, `chunks_fixed`) loaded, cross-encoder reranking wired into both serving and eval paths.
-- Not yet done: an ablation isolating enrichment's contribution from reranking's (see `retrieval-quality-upgrades.md`'s follow-ups); registering `embed:fixed`/its vecload in the self-healing agent's job registry.
+- Live and current: cleaned corpus, both chunking strategies re-embedded with product-context enrichment, both Postgres tables (`chunks_sentence`, `chunks_fixed`) loaded, cross-encoder reranking wired into both serving and eval paths, `embed:fixed`/`vecload:pg:chunks_fixed` registered in the self-healing agent's job registry.
+- Not yet done: an ablation isolating enrichment's contribution from reranking's (see `retrieval-quality-upgrades.md`'s follow-ups).

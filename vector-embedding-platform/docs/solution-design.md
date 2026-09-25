@@ -233,7 +233,7 @@ flowchart TD
 
 **`diagnose.py`:** sends the job name and error to an LLM constrained to respond with JSON from a fixed action menu — `retry` (transient: rate limit, timeout, network blip), `retry_with_failover` (embedding-API-specific failure), or `escalate` (code bugs, missing files, schema/config problems, anything unclear). If the response doesn't parse as valid JSON with one of those three actions, the fallback is always `escalate` — the system is designed to fail safe rather than guess.
 
-**`registry.py`:** an explicit allowlist mapping job-name prefixes to specific, known-idempotent functions (`ingest`, `embed:sentence`, `vecload:pg:chunks_sentence`, `goldset:generate`). The module docstring states the constraint directly: *"The agent may ONLY invoke these."* A failed job whose name isn't in the registry — currently including `embed:fixed` and its corresponding vecload — has no runner to retry, so it's escalated instead of guessed at (a known gap, tracked in `retrieval-quality-upgrades.md`'s follow-ups).
+**`registry.py`:** an explicit allowlist mapping job-name prefixes to specific, known-idempotent functions (`ingest`, `embed:sentence`, `embed:fixed`, `vecload:pg:chunks_sentence`, `vecload:pg:chunks_fixed`, `goldset:generate`). The module docstring states the constraint directly: *"The agent may ONLY invoke these."* A failed job whose name isn't in the registry has no runner to retry, so it's escalated instead of guessed at.
 
 **Retry policy:** up to 2 attempts per failed job, linear backoff (30s, 60s), each outcome (`recovered`, `exhausted->needs_human`, or immediate `escalate`) logged to `healing_log` alongside the original error and the LLM's diagnosis/reasoning.
 
@@ -252,7 +252,7 @@ flowchart TD
 | `streamlit` | Demo UI | Fast to build a usable chat interface as an API consumer |
 | `python-dotenv` | Environment/secret loading (`.env`) | Keeps credentials (Groq key, PG connection string) out of source |
 
-**Present in `requirements.txt` but not currently used anywhere in `src/`:** `langchain`, `langchain-community`, `langchain-openai`, `langgraph`, `instructor`, `ragas`. These were not removed from this document's scope by assumption — verified by grepping `src/` for imports of each. They read as dependencies staged for a future direction (structured-output tooling, agent orchestration, an alternative eval framework) rather than active parts of the current solution; worth pruning from `requirements.txt` if that direction isn't being pursued, to avoid the dependency footprint implying more than the code actually does.
+`langchain`, `langchain-community`, `langchain-openai`, `langgraph`, `instructor`, `ragas`, and `openai` were previously pinned in `requirements.txt` despite zero imports anywhere in `src/` (verified by grep) — they read as dependencies staged for a future direction (structured-output tooling, agent orchestration, an alternative eval framework) that was never pursued, so they were pruned to keep the dependency footprint honest about what the code actually uses.
 
 ---
 
