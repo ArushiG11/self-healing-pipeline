@@ -14,6 +14,9 @@ from typing import Iterable, Iterator
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "ledger"))
 from ledger import InvalidTransition, Ledger, content_hash  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "inject"))
+import faults  # noqa: E402
+
 from clean import MIN_TEXT_LENGTH, clean_record
 from reader import ReviewRecord, stream_reviews
 
@@ -49,6 +52,7 @@ def ingest_records(
             continue
 
         try:
+            faults.trigger(STAGE)
             cleaned = clean_record(record.data, min_text_length=min_text_length)
         except Exception as e:
             ledger.transition(

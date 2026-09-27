@@ -1,10 +1,35 @@
+import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "ingestion"))
 
-from dedup import dedup_records  # noqa: E402
+import reader as reader_module  # noqa: E402
+from dedup import dedup_records, stream_deduped_reviews  # noqa: E402
 from reader import ReviewRecord  # noqa: E402
+
+
+class _FakeFile:
+    def __init__(self, lines):
+        self._lines = lines
+
+    def __enter__(self):
+        return iter(self._lines)
+
+    def __exit__(self, *exc_info):
+        return False
+
+
+class _FakeFileSystem:
+    def __init__(self, lines):
+        self._lines = lines
+
+    def open(self, path, mode="r", encoding="utf-8"):
+        return _FakeFile(self._lines)
+
+
+def use_fake_lines(monkeypatch, lines):
+    monkeypatch.setattr(reader_module, "HfFileSystem", lambda: _FakeFileSystem(lines))
 
 
 def record(line_number: int, text: str, **extra) -> ReviewRecord:
@@ -61,3 +86,34 @@ def test_dedup_default_seen_is_not_shared_between_calls():
     out_b = list(dedup_records([record(2, "text a")]))
     assert len(out_a) == 1
     assert len(out_b) == 1  # fresh `seen` per call when not provided
+
+
+def test_stream_deduped_reviews_combines_cleaning_and_dedup(monkeypatch):
+    lines = [
+        json.dumps({"rating": 5.0, "title": "a", "text": "a fine review that repeats"}),
+        json.dumps({"rating": 4.0, "title": "b", "text": "a fine review that repeats"}),
+        json.dumps({"title": "c", "text": "missing rating so this is filtered first"}),
+        json.dumps({"rating": 3.0, "title": "d", "text": "a distinct second review"}),
+    ]
+    use_fake_lines(monkeypatch, [line + "\n" for line in lines])
+
+    records = list(stream_deduped_reviews(path="fake"))
+
+    assert [r.data["text"] for r in records] == [
+        "a fine review that repeats",
+        "a distinct second review",
+    ]
+
+
+def test_stream_deduped_reviews_seen_set_can_be_shared_across_calls(monkeypatch):
+    seen = set()
+    use_fake_lines(
+        monkeypatch,
+        [json.dumps({"rating": 5.0, "title": "a", "text": "shared across two calls"}) + "\n"],
+    )
+
+    first = list(stream_deduped_reviews(path="fake", seen=seen))
+    second = list(stream_deduped_reviews(path="fake", seen=seen))
+
+    assert len(first) == 1
+    assert len(second) == 0  # already seen from the first call

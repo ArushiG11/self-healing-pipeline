@@ -3,7 +3,37 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "ingestion"))
 
-from clean import clean_record, clean_text, normalize_whitespace, strip_html  # noqa: E402
+import reader as reader_module  # noqa: E402
+from clean import (  # noqa: E402
+    clean_record,
+    clean_text,
+    normalize_whitespace,
+    stream_clean_reviews,
+    strip_html,
+)
+
+
+class _FakeFile:
+    def __init__(self, lines):
+        self._lines = lines
+
+    def __enter__(self):
+        return iter(self._lines)
+
+    def __exit__(self, *exc_info):
+        return False
+
+
+class _FakeFileSystem:
+    def __init__(self, lines):
+        self._lines = lines
+
+    def open(self, path, mode="r", encoding="utf-8"):
+        return _FakeFile(self._lines)
+
+
+def use_fake_lines(monkeypatch, lines):
+    monkeypatch.setattr(reader_module, "HfFileSystem", lambda: _FakeFileSystem(lines))
 
 
 def test_strip_html_removes_tags_and_decodes_entities():
@@ -55,3 +85,36 @@ def test_clean_record_respects_custom_min_length():
     data = {"rating": 3.0, "title": "", "text": "exactly ten"}
     assert clean_record(data, min_text_length=5) is not None
     assert clean_record(data, min_text_length=50) is None
+
+
+def test_stream_clean_reviews_filters_and_cleans_over_a_stream(monkeypatch):
+    import json
+
+    lines = [
+        json.dumps({"rating": 5.0, "title": "<b>Great</b>", "text": "  a fine review indeed  "}),
+        json.dumps({"title": "no rating", "text": "this one is missing its rating field"}),
+        json.dumps({"rating": 2.0, "title": "short", "text": "too short"}),
+        json.dumps({"rating": 4.0, "title": "ok", "text": "another perfectly fine review here"}),
+    ]
+    use_fake_lines(monkeypatch, [line + "\n" for line in lines])
+
+    records = list(stream_clean_reviews(path="fake"))
+
+    assert [r.data["text"] for r in records] == [
+        "a fine review indeed",
+        "another perfectly fine review here",
+    ]
+    assert records[0].data["title"] == "Great"  # HTML stripped by clean_record
+    assert records[0].line_number == 1  # line numbers from the original stream preserved
+
+
+def test_stream_clean_reviews_respects_min_text_length(monkeypatch):
+    import json
+
+    use_fake_lines(
+        monkeypatch,
+        [json.dumps({"rating": 3.0, "title": "x", "text": "exactly ten"}) + "\n"],
+    )
+
+    assert list(stream_clean_reviews(path="fake", min_text_length=5)) != []
+    assert list(stream_clean_reviews(path="fake", min_text_length=50)) == []

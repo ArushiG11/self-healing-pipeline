@@ -158,6 +158,24 @@ class Ledger:
             cur.execute(query, params)
             return cur.fetchall()
 
+    def unhealed_failures(self, stage: Optional[str] = None) -> list[dict]:
+        """Failed jobs with no healing decision yet, oldest first.
+
+        "No decision yet" isn't a separate flag -- status=='failed' means exactly
+        that. TRANSITIONS['failed'] only allows -> 'retrying' or -> 'escalated', so
+        the instant something decides, the row leaves this set on its own; there's
+        no way for a "decided" row to still show up here.
+        """
+        query = "SELECT * FROM job_ledger WHERE status = 'failed'"
+        params: list = []
+        if stage is not None:
+            query += " AND stage = %s"
+            params.append(stage)
+        query += " ORDER BY updated_at"
+        with self._conn.cursor() as cur:
+            cur.execute(query, params)
+            return cur.fetchall()
+
     def _get(self, stage: str, input_hash: str) -> Optional[dict]:
         with self._conn.cursor() as cur:
             cur.execute(

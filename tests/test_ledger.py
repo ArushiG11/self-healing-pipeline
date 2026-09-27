@@ -33,6 +33,35 @@ def new_hash() -> str:
     return content_hash(uuid.uuid4().hex)
 
 
+def test_content_hash_is_deterministic():
+    assert content_hash("same input") == content_hash("same input")
+
+
+def test_content_hash_differs_for_different_input():
+    assert content_hash("input a") != content_hash("input b")
+
+
+def test_content_hash_treats_str_and_its_utf8_bytes_as_equivalent():
+    text = "café"
+    assert content_hash(text) == content_hash(text.encode("utf-8"))
+
+
+def test_content_hash_is_a_sha256_hex_digest():
+    digest = content_hash("anything")
+    assert len(digest) == 64
+    assert all(c in "0123456789abcdef" for c in digest)
+
+
+def test_ledger_usable_as_a_context_manager_and_closes_on_exit():
+    with Ledger(DSN) as led:
+        h = content_hash(uuid.uuid4().hex)
+        row = led.get_or_create("ingest", h)
+        assert row["status"] == "pending"
+        assert led._conn.closed == 0
+
+    assert led._conn.closed != 0  # connection was closed on __exit__
+
+
 def test_get_or_create_is_idempotent_and_starts_pending(ledger):
     h = new_hash()
     first = ledger.get_or_create("ingest", h, rows_in=100)
@@ -107,6 +136,57 @@ def test_escalation_path_failed_to_escalated_is_terminal(ledger):
         ledger.transition("healer", h, "retrying")
     with pytest.raises(InvalidTransition):
         ledger.transition("healer", h, "running")
+
+
+def test_unhealed_failures_returns_only_undecided_failures(ledger):
+    failed_hash = new_hash()
+    ledger.get_or_create("ingest", failed_hash)
+    ledger.transition("ingest", failed_hash, "running")
+    ledger.transition("ingest", failed_hash, "failed", error_type="X", error_message="x")
+
+    retrying_hash = new_hash()
+    ledger.get_or_create("ingest", retrying_hash)
+    ledger.transition("ingest", retrying_hash, "running")
+    ledger.transition("ingest", retrying_hash, "failed", error_type="X", error_message="x")
+    ledger.transition("ingest", retrying_hash, "retrying")  # decided: not undecided anymore
+
+    escalated_hash = new_hash()
+    ledger.get_or_create("ingest", escalated_hash)
+    ledger.transition("ingest", escalated_hash, "running")
+    ledger.transition("ingest", escalated_hash, "failed", error_type="X", error_message="x")
+    ledger.transition("ingest", escalated_hash, "escalated", error_type="X", error_message="x")
+
+    pending_hash = new_hash()
+    ledger.get_or_create("ingest", pending_hash)  # never even attempted
+
+    results = {row["input_hash"] for row in ledger.unhealed_failures()}
+    assert results == {failed_hash}
+
+
+def test_unhealed_failures_can_be_scoped_to_a_stage(ledger):
+    h1 = new_hash()
+    ledger.get_or_create("ingest", h1)
+    ledger.transition("ingest", h1, "running")
+    ledger.transition("ingest", h1, "failed", error_type="X", error_message="x")
+
+    h2 = new_hash()
+    ledger.get_or_create("embed", h2)
+    ledger.transition("embed", h2, "running")
+    ledger.transition("embed", h2, "failed", error_type="X", error_message="x")
+
+    assert {row["input_hash"] for row in ledger.unhealed_failures(stage="ingest")} == {h1}
+    assert {row["input_hash"] for row in ledger.unhealed_failures(stage="embed")} == {h2}
+
+
+def test_unhealed_failures_ordered_oldest_first(ledger):
+    hashes = [new_hash() for _ in range(3)]
+    for h in hashes:
+        ledger.get_or_create("ingest", h)
+        ledger.transition("ingest", h, "running")
+        ledger.transition("ingest", h, "failed", error_type="X", error_message="x")
+
+    results = [row["input_hash"] for row in ledger.unhealed_failures()]
+    assert results == hashes  # inserted/failed in this order -> returned in this order
 
 
 @pytest.mark.parametrize(

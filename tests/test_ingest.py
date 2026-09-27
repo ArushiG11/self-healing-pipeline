@@ -9,11 +9,35 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "ledger"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "ingestion"))
 
+import reader as reader_module  # noqa: E402
 from ledger import Ledger, content_hash  # noqa: E402
-from ingest import STAGE, ingest_records  # noqa: E402
+from ingest import STAGE, ingest_records, run_ingest  # noqa: E402
 from reader import ReviewRecord  # noqa: E402
 
 DSN = os.environ.get("TEST_DATABASE_DSN", "dbname=self_healing")
+
+
+class _FakeFile:
+    def __init__(self, lines):
+        self._lines = lines
+
+    def __enter__(self):
+        return iter(self._lines)
+
+    def __exit__(self, *exc_info):
+        return False
+
+
+class _FakeFileSystem:
+    def __init__(self, lines):
+        self._lines = lines
+
+    def open(self, path, mode="r", encoding="utf-8"):
+        return _FakeFile(self._lines)
+
+
+def use_fake_lines(monkeypatch, lines):
+    monkeypatch.setattr(reader_module, "HfFileSystem", lambda: _FakeFileSystem(lines))
 
 
 @pytest.fixture()
@@ -109,3 +133,20 @@ def test_multiple_records_each_tracked_independently(ledger):
         content_hash(r.raw): ledger._get(STAGE, content_hash(r.raw))["status"] for r in records
     }
     assert all(s == "succeeded" for s in statuses.values())
+
+
+def test_run_ingest_streams_directly_from_the_reader(ledger, monkeypatch):
+    import json
+
+    lines = [
+        json.dumps({"rating": 5.0, "title": "a", "text": "a fine review straight off the stream"}),
+        json.dumps({"title": "b", "text": "missing rating so this gets filtered"}),
+    ]
+    use_fake_lines(monkeypatch, [line + "\n" for line in lines])
+
+    out = list(run_ingest(ledger, path="fake"))
+
+    assert [r.data["text"] for r in out] == ["a fine review straight off the stream"]
+    with ledger._conn.cursor() as cur:
+        cur.execute("SELECT count(*) AS n FROM job_ledger WHERE stage = %s", (STAGE,))
+        assert cur.fetchone()["n"] == 2  # both raw lines got tracked, not just the survivor
