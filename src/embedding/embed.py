@@ -20,6 +20,9 @@ from ledger import InvalidTransition, Ledger, content_hash  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "inject"))
 import faults  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "observability"))
+from telemetry import stage_span  # noqa: E402
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "ingestion"))
 from reader import ReviewRecord  # noqa: E402
 
@@ -93,20 +96,30 @@ def embed_batches(
         except InvalidTransition:
             continue
 
-        try:
-            faults.trigger(STAGE)
-            vectors = embed_texts([r.data["text"] for r in batch])
-        except Exception as e:
-            ledger.transition(
-                STAGE,
-                input_hash,
-                "failed",
-                error_type=type(e).__name__,
-                error_message=str(e),
-            )
-            continue
+        chunks = []
+        with stage_span(STAGE, input_hash=input_hash) as span:
+            span.set_rows_in(len(batch))
+            try:
+                faults.trigger(STAGE)
+                vectors = embed_texts([r.data["text"] for r in batch])
+            except Exception as e:
+                ledger.transition(
+                    STAGE,
+                    input_hash,
+                    "failed",
+                    error_type=type(e).__name__,
+                    error_message=str(e),
+                )
+                span.mark_failed(type(e).__name__)
+            else:
+                ledger.transition(STAGE, input_hash, "succeeded", rows_out=len(vectors))
+                span.set_rows_out(len(vectors))
+                for record, vector in zip(batch, vectors):
+                    metadata = {k: v for k, v in record.data.items() if k != "text"}
+                    chunks.append(
+                        EmbeddedChunk(text=record.data["text"], embedding=vector, metadata=metadata)
+                    )
 
-        ledger.transition(STAGE, input_hash, "succeeded", rows_out=len(vectors))
-        for record, vector in zip(batch, vectors):
-            metadata = {k: v for k, v in record.data.items() if k != "text"}
-            yield EmbeddedChunk(text=record.data["text"], embedding=vector, metadata=metadata)
+        # yield only after the span has closed, same reasoning as ingest_records()
+        for chunk in chunks:
+            yield chunk

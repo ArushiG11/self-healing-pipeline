@@ -1,0 +1,13 @@
+[tool.ruff]
+line-length = 110
+extend-exclude = ["vector-embedding-platform", ".venv", "venv"]
+
+[tool.ruff.lint]
+# Correctness-focused: pyflakes (real bugs -- unused imports, undefined names, etc.)
+# plus pycodestyle errors, including E402 (import not at top of file) since this
+# codebase's modules deliberately do sys.path.insert() then a late import, each
+# annotated with `# noqa: E402` -- selecting E402 makes those annotations meaningful
+# rather than flagging them as unused. Deliberately not selecting import-sort (I) or
+# the wider Ruff-specific rule families, which would fight that established pattern
+# rather than catch real bugs.
+select = ["E", "F"]

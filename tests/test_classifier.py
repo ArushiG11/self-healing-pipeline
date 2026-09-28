@@ -120,6 +120,7 @@ def test_valid_json_but_not_an_object_defaults_to_escalate():
 # --- real end-to-end call, gated on real credentials being available ------------
 
 
+@pytest.mark.live
 @pytest.mark.skipif(
     not (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")),
     reason="no GOOGLE_API_KEY/GEMINI_API_KEY in this environment; set one to exercise the real API call",

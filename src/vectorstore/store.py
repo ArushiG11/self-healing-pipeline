@@ -25,6 +25,9 @@ from embed import EmbeddedChunk  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "inject"))
 import faults  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "observability"))
+from telemetry import stage_span  # noqa: E402
+
 STAGE = "vectorstore"
 DEFAULT_BATCH_SIZE = 100
 
@@ -55,28 +58,37 @@ def load_chunks(
     """
     register_vector(conn)  # so `embedding` reads back as a list/array, not a raw string
     inserted = 0
+    seen = 0
     pending = 0
-    with conn.cursor() as cur:
-        for chunk in chunks:
-            try:
-                faults.trigger(STAGE)
-                cur.execute(
-                    """
-                    INSERT INTO chunks (id, text, embedding, metadata)
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (id) DO NOTHING
-                    RETURNING id
-                    """,
-                    (chunk_id(chunk), chunk.text, chunk.embedding, Jsonb(chunk.metadata)),
-                )
-            except Exception:
-                conn.rollback()
-                raise
-            if cur.fetchone() is not None:
-                inserted += 1
-            pending += 1
-            if pending >= batch_size:
-                conn.commit()
-                pending = 0
-    conn.commit()
+
+    # One span per load_chunks() call, not per row: this stage has no per-chunk
+    # ledger tracking (unlike ingest/embed), so the call itself is the unit of work.
+    with stage_span(STAGE) as span:
+        with conn.cursor() as cur:
+            for chunk in chunks:
+                seen += 1
+                try:
+                    faults.trigger(STAGE)
+                    cur.execute(
+                        """
+                        INSERT INTO chunks (id, text, embedding, metadata)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (id) DO NOTHING
+                        RETURNING id
+                        """,
+                        (chunk_id(chunk), chunk.text, chunk.embedding, Jsonb(chunk.metadata)),
+                    )
+                except Exception:
+                    conn.rollback()
+                    span.set_rows_in(seen)
+                    raise
+                if cur.fetchone() is not None:
+                    inserted += 1
+                pending += 1
+                if pending >= batch_size:
+                    conn.commit()
+                    pending = 0
+        conn.commit()
+        span.set_rows_in(seen)
+        span.set_rows_out(inserted)
     return inserted

@@ -1,0 +1,103 @@
+{
+  "title": "Self-Healing Pipeline",
+  "uid": "self-healing-pipeline",
+  "timezone": "browser",
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Rows In / Out by Stage",
+      "type": "timeseries",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "bfzhpv159pngga" },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10 } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(pipeline_rows_in_total[1m])) by (stage)",
+          "legendFormat": "{{stage}} in",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(pipeline_rows_out_total[1m])) by (stage)",
+          "legendFormat": "{{stage}} out",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Stage Latency (p50 / p95 / p99)",
+      "type": "timeseries",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "bfzhpv159pngga" },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "custom": { "drawStyle": "line", "fillOpacity": 5 } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(pipeline_stage_duration_seconds_bucket[5m])) by (le, stage))",
+          "legendFormat": "{{stage}} p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(pipeline_stage_duration_seconds_bucket[5m])) by (le, stage))",
+          "legendFormat": "{{stage}} p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(pipeline_stage_duration_seconds_bucket[5m])) by (le, stage))",
+          "legendFormat": "{{stage}} p99",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Failure Rate by Stage",
+      "type": "timeseries",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 18 },
+      "datasource": { "type": "prometheus", "uid": "bfzhpv159pngga" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": { "drawStyle": "line", "fillOpacity": 15 }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(pipeline_failures_total[5m])) by (stage) / sum(rate(pipeline_attempts_total[5m])) by (stage)",
+          "legendFormat": "{{stage}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Failures by Error Type (5m rate)",
+      "type": "timeseries",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 27 },
+      "datasource": { "type": "prometheus", "uid": "bfzhpv159pngga" },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "drawStyle": "bars", "fillOpacity": 50 } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(pipeline_failures_total[5m])) by (stage, error_type)",
+          "legendFormat": "{{stage}} / {{error_type}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}

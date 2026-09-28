@@ -17,6 +17,9 @@ from ledger import InvalidTransition, Ledger, content_hash  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "inject"))
 import faults  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "observability"))
+from telemetry import stage_span  # noqa: E402
+
 from clean import MIN_TEXT_LENGTH, clean_record
 from reader import ReviewRecord, stream_reviews
 
@@ -51,25 +54,35 @@ def ingest_records(
         except InvalidTransition:
             continue
 
-        try:
-            faults.trigger(STAGE)
-            cleaned = clean_record(record.data, min_text_length=min_text_length)
-        except Exception as e:
-            ledger.transition(
-                STAGE,
-                input_hash,
-                "failed",
-                error_type=type(e).__name__,
-                error_message=str(e),
-            )
-            continue
+        survivor = None
+        with stage_span(STAGE, input_hash=input_hash) as span:
+            try:
+                faults.trigger(STAGE)
+                cleaned = clean_record(record.data, min_text_length=min_text_length)
+            except Exception as e:
+                ledger.transition(
+                    STAGE,
+                    input_hash,
+                    "failed",
+                    error_type=type(e).__name__,
+                    error_message=str(e),
+                )
+                span.mark_failed(type(e).__name__)
+            else:
+                if cleaned is None:
+                    ledger.transition(STAGE, input_hash, "succeeded", rows_out=0)
+                    span.set_rows_out(0)
+                else:
+                    ledger.transition(STAGE, input_hash, "succeeded", rows_out=1)
+                    span.set_rows_out(1)
+                    survivor = ReviewRecord(
+                        line_number=record.line_number, raw=record.raw, data=cleaned
+                    )
 
-        if cleaned is None:
-            ledger.transition(STAGE, input_hash, "succeeded", rows_out=0)
-            continue
-
-        ledger.transition(STAGE, input_hash, "succeeded", rows_out=1)
-        yield ReviewRecord(line_number=record.line_number, raw=record.raw, data=cleaned)
+        # yield only after the span has closed -- otherwise its duration would
+        # include however long the consumer takes between next() calls
+        if survivor is not None:
+            yield survivor
 
 
 def run_ingest(

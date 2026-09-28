@@ -150,7 +150,9 @@ def test_injected_fault_fails_the_embed_batch_via_ledger(ledger):
 
 
 def test_injected_fault_propagates_from_load_chunks_and_rolls_back(conn):
-    good = EmbeddedChunk(text="row that should not get stuck uncommitted", embedding=[0.01] * 384, metadata={})
+    good = EmbeddedChunk(
+        text="row that should not get stuck uncommitted", embedding=[0.01] * 384, metadata={}
+    )
     faults.arm(STORE_STAGE, "dropped_connection")
 
     with pytest.raises(faults.ConnectionDroppedError):

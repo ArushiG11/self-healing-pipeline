@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "ledger"
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "ingestion"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "embedding"))
 
-from ledger import Ledger, content_hash  # noqa: E402
+from ledger import Ledger  # noqa: E402
 from reader import ReviewRecord  # noqa: E402
 import embed as embed_module  # noqa: E402
 from embed import EMBEDDING_DIM, STAGE, _chunked, batch_hash, embed_batches, get_model  # noqa: E402

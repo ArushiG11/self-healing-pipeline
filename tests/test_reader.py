@@ -135,7 +135,7 @@ def test_recovery_pattern_is_a_new_call_with_skip_past_the_bad_line(monkeypatch)
 
 # --- real integration: the live dataset, bounded so it stays fast -----------------
 
-
+@pytest.mark.live
 def test_real_stream_reads_actual_electronics_reviews():
     records = list(stream_reviews(limit=3))
 
